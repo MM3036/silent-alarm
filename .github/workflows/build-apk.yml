@@ -1,0 +1,69 @@
+name: Build unchanged SilentAlarm APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/apk-build-20261017]
+    paths: [.github/workflows/build-apk.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: silentalarm-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out fixed upstream source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: izumisagirii/silent-alarm
+          ref: d1295112c93748d563536e37863003bbf13de5a4
+          persist-credentials: false
+
+      - name: Set up Java 21
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install required Android SDK packages
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36.1" "build-tools;36.0.0"
+
+      - name: Build debug APK without changing application sources
+        run: bash ./gradlew --no-daemon --console=plain :app:assembleDebug
+
+      - name: Verify signature and record provenance
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = d1295112c93748d563536e37863003bbf13de5a4
+          git diff --exit-code
+          mkdir -p deliverables
+          cp app/build/outputs/apk/debug/app-debug.apk deliverables/SilentAlarm-2.1-d129511-debug.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs \
+            deliverables/SilentAlarm-2.1-d129511-debug.apk > deliverables/SIGNATURE.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging \
+            deliverables/SilentAlarm-2.1-d129511-debug.apk > deliverables/APK-INFO.txt
+          printf '%s\n' \
+            'Source: https://github.com/izumisagirii/silent-alarm' \
+            'Commit: d1295112c93748d563536e37863003bbf13de5a4' \
+            'Task: :app:assembleDebug' \
+            'No application source or build configuration changes.' \
+            'Debug signing is temporary and differs from the author release signing key.' \
+            > deliverables/BUILD-INFO.txt
+          cd deliverables
+          sha256sum *.apk > SHA256SUMS.txt
+
+      - name: Upload APK and verification files
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: SilentAlarm-2.1-d129511-debug
+          path: deliverables/
+          if-no-files-found: error
+          retention-days: 7
